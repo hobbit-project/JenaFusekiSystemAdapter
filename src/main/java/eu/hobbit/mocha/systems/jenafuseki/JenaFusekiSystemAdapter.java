@@ -44,7 +44,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	private AtomicInteger totalReceived = new AtomicInteger(0);
 	private AtomicInteger totalSent = new AtomicInteger(0);
 	private Semaphore allDataReceivedMutex = new Semaphore(0);
-	private Semaphore fusekiServerStartedMutex = new Semaphore(0,true);
+	private Semaphore fusekiServerStartedMutex = new Semaphore(0);
 
 	private int loadingNumber = 0;
 	private AtomicBoolean fusekiServerStarted = new AtomicBoolean(false);
