@@ -93,8 +93,8 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			insertQuery = insertQuery.replaceFirst("INSERT", "").replaceFirst("WITH", "INSERT DATA { GRAPH");
 			insertQuery = insertQuery.substring(0, insertQuery.length() - 13).concat(" }");
 			String rewrittenInsertQuery = insertQuery;
+			
 			Txn.executeWrite(conn, ()->conn.update(rewrittenInsertQuery));
-
 //			try {
 //		    	conn.begin(ReadWrite.WRITE);
 //		    	conn.update(insertQuery);
@@ -124,6 +124,15 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 		long timestamp1 = System.currentTimeMillis();
 		if (queryString.contains("INSERT DATA")) {
 			Txn.executeWrite(conn, ()->conn.update(queryString));
+//			try {
+//		    	conn.begin(ReadWrite.WRITE);
+//		    	conn.update(queryString);
+//		    	conn.commit();
+//		    } catch (Exception e) {
+//				LOGGER.error("Exception while executing insert query.", e);
+//			} finally {
+//		    	conn.end();
+//		    }
 			try {
 				this.sendResultToEvalStorage(taskId, RabbitMQUtils.writeString(""));
 			} catch (IOException e) {
@@ -133,13 +142,28 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 		else {
 			ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
 			
+//			try {
+//				conn.begin(ReadWrite.READ);
+//				QueryExecution qExec = QueryExecutionFactory.create(queryString);
+//				ResultSet results = qExec.execSelect();
+//				ResultSetFormatter.outputAsJSON(outputStream, results);
+//		    } catch (Exception e) {
+//				LOGGER.error("Problem while executing task " + taskId + ": " + queryString, e);
+//				try {
+//					outputStream.write("{\"head\":{\"vars\":[\"xxx\"]},\"results\":{\"bindings\":[{\"xxx\":{\"type\":\"literal\",\"value\":\"XXX\"}}]}}".getBytes());
+//				} catch (IOException e1) {
+//					LOGGER.error("Problem while executing task " + taskId + ": " + queryString, e);
+//				}
+//			}  finally {
+//		    	conn.end();
+//		    }
+			
 			Txn.executeRead(conn, ()->{
 				try (QueryExecution qExec = QueryExecutionFactory.create(queryString)) {
 	            	ResultSet results = qExec.execSelect();
 	            	ResultSetFormatter.outputAsJSON(outputStream, results);
 	            } catch (Exception e) {
 					LOGGER.error("Problem while executing task " + taskId + ": " + queryString, e);
-					//TODO: fix this hacking
 					try {
 						outputStream.write("{\"head\":{\"vars\":[\"xxx\"]},\"results\":{\"bindings\":[{\"xxx\":{\"type\":\"literal\",\"value\":\"XXX\"}}]}}".getBytes());
 					} catch (IOException e1) {
@@ -186,7 +210,6 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			LOGGER.info("Bulk loading phase (" + loadingNumber + ") is over.");
 			
 			LOGGER.info("Deleting all data files.");
-
 			File theDir = new File(datasetFolderName);
 			if(theDir.exists()) {
 				for (File f : theDir.listFiles()) {
@@ -265,7 +288,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 		try {
 			conn.close();
 		} catch (Exception e) {
-			LOGGER.error("Got an exception while closing query execution factories.", e);
+			LOGGER.error("Got an exception while closing connection to server.", e);
 		}
 		super.close();
 		LOGGER.info("Apache Jena Fuseki has stopped.");
