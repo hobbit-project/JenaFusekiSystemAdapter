@@ -11,15 +11,14 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.aksw.jena_sparql_api.core.QueryExecutionFactory;
-import org.aksw.jena_sparql_api.core.UpdateExecutionFactory;
-import org.aksw.jena_sparql_api.core.UpdateExecutionFactoryHttp;
-import org.aksw.jena_sparql_api.core.utils.UpdateRequestUtils;
-import org.aksw.jena_sparql_api.http.QueryExecutionFactoryHttp;
-import org.apache.jena.update.UpdateRequest;
+import org.apache.commons.io.FileUtils;
 import org.apache.jena.query.QueryExecution;
+import org.apache.jena.query.QueryExecutionFactory;
 import org.apache.jena.query.ResultSet;
 import org.apache.jena.query.ResultSetFormatter;
+import org.apache.jena.rdfconnection.RDFConnection;
+import org.apache.jena.rdfconnection.RDFConnectionFactory;
+import org.apache.jena.system.Txn;
 import org.hobbit.core.components.AbstractSystemAdapter;
 import org.hobbit.core.rabbit.RabbitMQUtils;
 import org.slf4j.Logger;
@@ -27,17 +26,14 @@ import org.slf4j.LoggerFactory;
 
 import eu.hobbit.mocha.systems.jenafuseki.util.JenaFusekiSystemAdapterConstants;
 
-import org.apache.commons.io.FileUtils;
-import org.apache.jena.atlas.web.auth.HttpAuthenticator;
-import org.apache.jena.atlas.web.auth.SimpleAuthenticator;
 /**
  * Apache Jena Fuseki System Adapter class for all MOCHA tasks
  */
 public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	
 	private static final Logger LOGGER = LoggerFactory.getLogger(JenaFusekiSystemAdapter.class);
-	private QueryExecutionFactory queryExecFactory;
-	private UpdateExecutionFactory updateExecFactory;
+	
+	private RDFConnection conn;
 	
 	private boolean dataLoadingFinished = false;
 	
@@ -49,7 +45,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	private int loadingNumber = 0;
 	private AtomicBoolean fusekiServerStarted = new AtomicBoolean(false);
 	private String datasetFolderName = "/myvol/datasets";
-	
+		
 	public JenaFusekiSystemAdapter(int numberOfMessagesInParallel) {
 		super(numberOfMessagesInParallel);
 	}
@@ -59,11 +55,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	public void init() throws Exception {
 		LOGGER.info("Initialization begins.");
 		super.init();
-		// create query factory
-		queryExecFactory = new QueryExecutionFactoryHttp("http://localhost:3030/ds/query");
-		// create update factory
-		HttpAuthenticator auth = new SimpleAuthenticator("admin", "admin".toCharArray());
-		updateExecFactory = new UpdateExecutionFactoryHttp("http://localhost:3030/ds/update", auth);
+		conn = RDFConnectionFactory.connect("http://localhost:3030/ds");
 		LOGGER.info("Initialization is over.");
 	}
 	
@@ -100,13 +92,18 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			// rewrite insert to let jena fuseki to create the appropriate graphs while inserting
 			insertQuery = insertQuery.replaceFirst("INSERT", "").replaceFirst("WITH", "INSERT DATA { GRAPH");
 			insertQuery = insertQuery.substring(0, insertQuery.length() - 13).concat(" }");
-			
-			UpdateRequest updateRequest = UpdateRequestUtils.parse(insertQuery);
-			try {
-				updateExecFactory.createUpdateProcessor(updateRequest).execute();
-			} catch (Exception e) {
-				e.printStackTrace();
-			}
+			String rewrittenInsertQuery = insertQuery;
+			Txn.executeWrite(conn, ()->conn.update(rewrittenInsertQuery));
+
+//			try {
+//		    	conn.begin(ReadWrite.WRITE);
+//		    	conn.update(insertQuery);
+//		    	conn.commit();
+//		    } catch (Exception e) {
+//				LOGGER.error("Exception while executing insert query.", e);
+//			} finally {
+//		    	conn.end();
+//		    }
 		}
 	}
 
@@ -126,14 +123,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 		String queryString = RabbitMQUtils.readString(buffer);
 		long timestamp1 = System.currentTimeMillis();
 		if (queryString.contains("INSERT DATA")) {
-			// TODO: check the replacement
-			UpdateRequest updateRequest = UpdateRequestUtils.parse(queryString);
-			try {
-				updateExecFactory.createUpdateProcessor(updateRequest).execute();
-			} catch (Exception e) {
-				e.printStackTrace();
-			}
-
+			Txn.executeWrite(conn, ()->conn.update(queryString));
 			try {
 				this.sendResultToEvalStorage(taskId, RabbitMQUtils.writeString(""));
 			} catch (IOException e) {
@@ -141,24 +131,22 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			}
 		}
 		else {
-			QueryExecution qe = queryExecFactory.createQueryExecution(queryString);
-			ResultSet results = null;
 			ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-
-			try {
-				results = qe.execSelect();
-				ResultSetFormatter.outputAsJSON(outputStream, results);
-			} catch (Exception e) {
-				LOGGER.error("Problem while executing task " + taskId + ": " + queryString, e);
-				//TODO: fix this hacking
-				try {
-					outputStream.write("{\"head\":{\"vars\":[\"xxx\"]},\"results\":{\"bindings\":[{\"xxx\":{\"type\":\"literal\",\"value\":\"XXX\"}}]}}".getBytes());
-				} catch (IOException e1) {
+			
+			Txn.executeRead(conn, ()->{
+				try (QueryExecution qExec = QueryExecutionFactory.create(queryString)) {
+	            	ResultSet results = qExec.execSelect();
+	            	ResultSetFormatter.outputAsJSON(outputStream, results);
+	            } catch (Exception e) {
 					LOGGER.error("Problem while executing task " + taskId + ": " + queryString, e);
-				}
-			} finally {
-				qe.close();
-			}
+					//TODO: fix this hacking
+					try {
+						outputStream.write("{\"head\":{\"vars\":[\"xxx\"]},\"results\":{\"bindings\":[{\"xxx\":{\"type\":\"literal\",\"value\":\"XXX\"}}]}}".getBytes());
+					} catch (IOException e1) {
+						LOGGER.error("Problem while executing task " + taskId + ": " + queryString, e);
+					}
+				} 
+	        }); 
 
 			try {
 				this.sendResultToEvalStorage(taskId, outputStream.toByteArray());
@@ -275,8 +263,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	public void close() throws IOException {
 		LOGGER.info("Stopping Apache Jena Fuseki.");
 		try {
-			queryExecFactory.close();
-			updateExecFactory.close();
+			conn.close();
 		} catch (Exception e) {
 			LOGGER.error("Got an exception while closing query execution factories.", e);
 		}
