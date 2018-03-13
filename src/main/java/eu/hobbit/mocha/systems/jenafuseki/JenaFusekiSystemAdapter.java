@@ -7,9 +7,14 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.ByteBuffer;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.jena.query.QueryExecution;
@@ -42,7 +47,11 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 
 	private Semaphore allDataReceivedMutex = new Semaphore(0);
 	private Semaphore fusekiServerStartedMutex = new Semaphore(0);
-
+	private Semaphore insertsFinishedMutex = new Semaphore(0);
+	
+	ExecutorService executor = Executors.newFixedThreadPool(4);
+	private ReadWriteLock lock = new ReentrantReadWriteLock();
+	
 	private int loadingNumber = 0;
 	private AtomicBoolean fusekiServerStarted = new AtomicBoolean(false);
 	private String datasetFolderName = "/myvol/datasets";
@@ -63,100 +72,116 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	}
 	
 	public void receiveGeneratedData(byte[] data) {
-		synchronized(this) {
-			if (dataLoadingFinished == false) {
-				ByteBuffer dataBuffer = ByteBuffer.wrap(data);    	
-				String fileName = RabbitMQUtils.readString(dataBuffer);
-				
-				LOGGER.info("Receiving file: " + fileName);
-							
-				byte [] content = new byte[dataBuffer.remaining()];
-				dataBuffer.get(content, 0, dataBuffer.remaining());
-				
-				if (content.length != 0) {
-					try {
-						if (fileName.contains("/"))
-							fileName = fileName.replaceAll("[^/]*[/]", "");
-						FileUtils.writeByteArrayToFile(new File(datasetFolderName + File.separator + fileName), content);
-					} catch (FileNotFoundException e) {
-						LOGGER.error("Exception while writing data file", e);
-					} catch (IOException e) {
-						LOGGER.error("Exception while writing data file", e);
-					}
+		if (dataLoadingFinished == false) {
+			ByteBuffer dataBuffer = ByteBuffer.wrap(data);    	
+			String fileName = RabbitMQUtils.readString(dataBuffer);
+			
+			LOGGER.info("Receiving file: " + fileName);
+						
+			byte [] content = new byte[dataBuffer.remaining()];
+			dataBuffer.get(content, 0, dataBuffer.remaining());
+			
+			if (content.length != 0) {
+				try {
+					if (fileName.contains("/"))
+						fileName = fileName.replaceAll("[^/]*[/]", "");
+					FileUtils.writeByteArrayToFile(new File(datasetFolderName + File.separator + fileName), content);
+				} catch (FileNotFoundException e) {
+					LOGGER.error("Exception while writing data file", e);
+				} catch (IOException e) {
+					LOGGER.error("Exception while writing data file", e);
 				}
+			}
 
-				if(totalReceived.incrementAndGet() == totalSent.get()) {
-					allDataReceivedMutex.release();
+			if(totalReceived.incrementAndGet() == totalSent.get()) {
+				allDataReceivedMutex.release();
+			}
+		}
+		else {			
+			ByteBuffer buffer = ByteBuffer.wrap(data);
+			String insertQuery = RabbitMQUtils.readString(buffer); 
+			
+			// rewrite insert to let jena fuseki to create the appropriate graphs while inserting
+			insertQuery = insertQuery.replaceFirst("INSERT", "").replaceFirst("WITH", "INSERT DATA { GRAPH");
+			insertQuery = insertQuery.substring(0, insertQuery.length() - 13).concat(" }");
+			String rewrittenInsertQuery = insertQuery;
+			
+			executor.submit(() -> {
+				lock.writeLock().lock();
+				try {
+					Txn.executeWrite(conn, () -> conn.update(rewrittenInsertQuery));
+				} finally {
+					lock.writeLock().unlock();
 				}
-			}
-			else {			
-				ByteBuffer buffer = ByteBuffer.wrap(data);
-				String insertQuery = RabbitMQUtils.readString(buffer); 
-				
-				// rewrite insert to let jena fuseki to create the appropriate graphs while inserting
-				insertQuery = insertQuery.replaceFirst("INSERT", "").replaceFirst("WITH", "INSERT DATA { GRAPH");
-				insertQuery = insertQuery.substring(0, insertQuery.length() - 13).concat(" }");
-				String rewrittenInsertQuery = insertQuery;
-				
-				Txn.executeWrite(conn, () -> conn.update(rewrittenInsertQuery));
-				
-				numberOfInsertQueriesDATA.incrementAndGet();
-			}
+			});
+			numberOfInsertQueriesDATA.incrementAndGet();
 		}
 	}
 
 	public void receiveGeneratedTask(String taskId, byte[] data) {
-		synchronized(this) {
-			// before executing a task check if Fuseki Server is up and running and if not wait until it is
-			if(!fusekiServerStarted.get()) {
-				LOGGER.info("[Task] Waiting until Jena Fuseki Server is online...");
-				try {
-					fusekiServerStartedMutex.acquire();
-				} catch (InterruptedException e) {
-					LOGGER.error("Exception while waitting for Fuseki Server to be started.", e);
-				}
-				LOGGER.info("Jena Fuseki Server started successfully.");
+		// before executing a task check if Fuseki Server is up and running and if not wait until it is
+		if(!fusekiServerStarted.get()) {
+			LOGGER.info("[Task] Waiting until Jena Fuseki Server is online...");
+			try {
+				fusekiServerStartedMutex.acquire();
+			} catch (InterruptedException e) {
+				LOGGER.error("Exception while waitting for Fuseki Server to be started.", e);
 			}
-			
-			ByteBuffer buffer = ByteBuffer.wrap(data);
-			String queryString = RabbitMQUtils.readString(buffer);
-			
-			long timestamp1 = System.currentTimeMillis();
-			if (queryString.contains("INSERT DATA")) {
-				Txn.executeWrite(conn, () -> conn.update(queryString));
+			LOGGER.info("Jena Fuseki Server started successfully.");
+		}
+		
+		ByteBuffer buffer = ByteBuffer.wrap(data);
+		String queryString = RabbitMQUtils.readString(buffer);
+		
+		long timestamp1 = System.currentTimeMillis();
+		if (queryString.contains("INSERT DATA")) {
+			executor.submit(() -> {
+				lock.writeLock().lock();
+				try {
+					Txn.executeWrite(conn, () -> conn.update(queryString));
+				} finally {
+					lock.writeLock().unlock();
+				}
 				try {
 					this.sendResultToEvalStorage(taskId, RabbitMQUtils.writeString(""));
 				} catch (IOException e) {
 					LOGGER.error("Got an exception while sending results.", e);
 				}
-				numberOfInsertQueriesTASK.incrementAndGet();
-			}
-			else {
-				ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-				Txn.executeRead(conn, () -> {
-					try (QueryExecution qExec = conn.query(queryString)) {
-						ResultSet results = qExec.execSelect();
-		            	ResultSetFormatter.outputAsJSON(outputStream, results);
-		            } catch (Exception e) {
-						LOGGER.error("Problem while executing task " + taskId + ": " + queryString, e);
-						try {
-							outputStream.write("{\"head\":{\"vars\":[\"xxx\"]},\"results\":{\"bindings\":[{\"xxx\":{\"type\":\"literal\",\"value\":\"XXX\"}}]}}".getBytes());
-						} catch (IOException e1) {
-							LOGGER.error("Problem while executing task " + taskId + ": " + queryString, e);
-						}
-					} 
-		        }); 			
-				
-				try {
-					this.sendResultToEvalStorage(taskId, outputStream.toByteArray());
-				} catch (IOException e) {
-					LOGGER.error("Got an exception while sending results.", e);
-				}
-				numberOfSelectQueries.incrementAndGet();
-			}
-			long timestamp2 = System.currentTimeMillis();
-			LOGGER.info("Task " + taskId + ": " + (timestamp2-timestamp1));
+			});
+			numberOfInsertQueriesTASK.incrementAndGet();
 		}
+		else {
+			ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+			Runnable readTask = () -> {
+				lock.readLock().lock();
+				try {
+					Txn.executeRead(conn, () -> {
+						try (QueryExecution qExec = conn.query(queryString)) {
+							ResultSet results = qExec.execSelect();
+			            	ResultSetFormatter.outputAsJSON(outputStream, results);
+			            } catch (Exception e) {
+							LOGGER.error("Problem while executing task " + taskId + ": " + queryString, e);
+							try {
+								outputStream.write("{\"head\":{\"vars\":[\"xxx\"]},\"results\":{\"bindings\":[{\"xxx\":{\"type\":\"literal\",\"value\":\"XXX\"}}]}}".getBytes());
+							} catch (IOException e1) {
+								LOGGER.error("Problem while executing task " + taskId + ": " + queryString, e);
+							}
+						} 
+						try {
+							this.sendResultToEvalStorage(taskId, outputStream.toByteArray());
+						} catch (IOException e) {
+							LOGGER.error("Got an exception while sending results.", e);
+						}
+			        }); 		
+				} finally {
+					lock.readLock().unlock();
+				}	
+			};
+			executor.submit(readTask);
+			numberOfSelectQueries.incrementAndGet();
+		}
+		long timestamp2 = System.currentTimeMillis();
+		LOGGER.info("Task " + taskId + ": " + (timestamp2-timestamp1));
 	}
 
 	@Override
@@ -266,6 +291,12 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 		LOGGER.info("Total insert (TASK) queries served: " + numberOfInsertQueriesTASK);
 		LOGGER.info("Total select queries served: " + numberOfSelectQueries);
 		conn.close();
+		executor.shutdown();
+		try {
+			executor.awaitTermination(20, TimeUnit.MINUTES);
+		} catch (InterruptedException e) {
+            LOGGER.error("Exception while waiting for executors termination.", e);
+		}
 		super.close();
 		LOGGER.info("Apache Jena Fuseki has stopped.");
 	}
