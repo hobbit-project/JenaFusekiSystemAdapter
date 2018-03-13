@@ -1,13 +1,13 @@
 #!/bin/sh
 
-rm /jenafuseki/jenafuseki_run.log 2> /dev/null
+rm /jenafuseki/fuseki.log 2> /dev/null
 
 echo "Starting Jena Fuseki Server (--loc --localhost --update /ds)..."
-/jena-fuseki/fuseki-server --loc=/jenafuseki/data --localhost --update /ds > /jenafuseki/jenafuseki_run.log 2>&1 &
+/jena-fuseki/fuseki-server --loc=/jenafuseki/data --localhost --update /ds > /jenafuseki/fuseki.log 2>&1 &
 seconds_passed=0
 
 # wait until jenafuseki is ready
-until grep -m 1 "on port 3030" /jenafuseki/jenafuseki_run.log
+until grep -m 1 "on port 3030" /jenafuseki/fuseki.log
 do
    sleep 1
    seconds_passed=$((seconds_passed+1))
