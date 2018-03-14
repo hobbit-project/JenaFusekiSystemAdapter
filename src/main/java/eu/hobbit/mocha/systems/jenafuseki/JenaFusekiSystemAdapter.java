@@ -32,7 +32,10 @@ import eu.hobbit.mocha.systems.jenafuseki.util.JenaFusekiSystemAdapterConstants;
 
 /**
  * Apache Jena Fuseki System Adapter class for all MOCHA tasks
+ * 
+ * @author Vassilis Papakonstantinou (papv@ics.forth.gr)
  */
+
 public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	
 	private static final Logger LOGGER = LoggerFactory.getLogger(JenaFusekiSystemAdapter.class);
@@ -41,15 +44,11 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	
 	private AtomicInteger totalReceived = new AtomicInteger(0);
 	private AtomicInteger totalSent = new AtomicInteger(0);
-	private AtomicInteger numberOfInsertQueriesDATA = new AtomicInteger(0);
-	private AtomicInteger numberOfInsertQueriesTASK = new AtomicInteger(0);
-	private AtomicInteger numberOfSelectQueries = new AtomicInteger(0);
 
 	private Semaphore allDataReceivedMutex = new Semaphore(0);
 	private Semaphore fusekiServerStartedMutex = new Semaphore(0);
-	private Semaphore insertsFinishedMutex = new Semaphore(0);
 	
-	ExecutorService executor = Executors.newFixedThreadPool(4);
+	private ExecutorService executor = Executors.newFixedThreadPool(10);
 	private ReadWriteLock lock = new ReentrantReadWriteLock();
 	
 	private int loadingNumber = 0;
@@ -114,7 +113,6 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 					lock.writeLock().unlock();
 				}
 			});
-			numberOfInsertQueriesDATA.incrementAndGet();
 		}
 	}
 
@@ -148,7 +146,6 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 					LOGGER.error("Got an exception while sending results.", e);
 				}
 			});
-			numberOfInsertQueriesTASK.incrementAndGet();
 		}
 		else {
 			ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
@@ -178,7 +175,6 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 				}	
 			};
 			executor.submit(readTask);
-			numberOfSelectQueries.incrementAndGet();
 		}
 		long timestamp2 = System.currentTimeMillis();
 		LOGGER.info("Task " + taskId + ": " + (timestamp2-timestamp1));
@@ -241,7 +237,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	/*
 	 * Load all files contained in data path using the tdbloader.
 	 * tdbloader cannot be run in parallel with fuseki server (due to transaction issues), so the server
-	 * have to be started after the loading phase.
+	 * have to be started after the bulk loading phase.
 	 */
 	private void loadVersion(String graphURI) {
 		LOGGER.info("Loading data on " + graphURI + "...");
@@ -287,9 +283,6 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 
 	public void close() throws IOException {
 		LOGGER.info("Stopping Apache Jena Fuseki.");
-		LOGGER.info("Total insert (DATA) queries served: " + numberOfInsertQueriesDATA);
-		LOGGER.info("Total insert (TASK) queries served: " + numberOfInsertQueriesTASK);
-		LOGGER.info("Total select queries served: " + numberOfSelectQueries);
 		conn.close();
 		executor.shutdown();
 		try {
