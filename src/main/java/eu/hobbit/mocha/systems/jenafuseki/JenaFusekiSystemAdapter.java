@@ -1,4 +1,4 @@
-package eu.hobbit.mocha.systems;
+package eu.hobbit.mocha.systems.jenafuseki;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -28,7 +28,7 @@ import org.hobbit.core.rabbit.RabbitMQUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import eu.hobbit.mocha.systems.util.Constants;
+import eu.hobbit.mocha.systems.jenafuseki.util.Constants;
 
 /**
  * Apache Jena Fuseki System Adapter class for all MOCHA tasks

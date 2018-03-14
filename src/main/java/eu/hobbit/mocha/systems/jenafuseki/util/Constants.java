@@ -2,7 +2,7 @@
 /**
  * 
  */
-package eu.hobbit.mocha.systems.util;
+package eu.hobbit.mocha.systems.jenafuseki.util;
 
 /**
  * @author papv
