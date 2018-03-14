@@ -2,13 +2,13 @@
 /**
  * 
  */
-package eu.hobbit.mocha.systems.jenafuseki.util;
+package eu.hobbit.mocha.systems.util;
 
 /**
  * @author papv
  *
  */
-public final class JenaFusekiSystemAdapterConstants {
+public final class Constants {
 	
 	/**
      * The signal sent by the benchmarked system to indicate that it

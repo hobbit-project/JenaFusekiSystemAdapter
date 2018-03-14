@@ -1,4 +1,4 @@
-package eu.hobbit.mocha.systems.jenafuseki;
+package eu.hobbit.mocha.systems;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -28,7 +28,7 @@ import org.hobbit.core.rabbit.RabbitMQUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import eu.hobbit.mocha.systems.jenafuseki.util.JenaFusekiSystemAdapterConstants;
+import eu.hobbit.mocha.systems.util.Constants;
 
 /**
  * Apache Jena Fuseki System Adapter class for all MOCHA tasks
@@ -48,7 +48,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	private Semaphore allDataReceivedMutex = new Semaphore(0);
 	private Semaphore fusekiServerStartedMutex = new Semaphore(0);
 	
-	private ExecutorService executor = Executors.newFixedThreadPool(10);
+	private ExecutorService executor = Executors.newSingleThreadExecutor();
 	private ReadWriteLock lock = new ReentrantReadWriteLock();
 	
 	private int loadingNumber = 0;
@@ -182,7 +182,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 
 	@Override
 	public void receiveCommand(byte command, byte[] data) {
-		if (JenaFusekiSystemAdapterConstants.BULK_LOAD_DATA_GEN_FINISHED == command) {
+		if (Constants.BULK_LOAD_DATA_GEN_FINISHED == command) {
 			ByteBuffer buffer = ByteBuffer.wrap(data);
 			int numberOfMessages = buffer.getInt();
 			boolean lastBulkLoad = buffer.get() != 0;
@@ -226,7 +226,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			}
 			
 			try {
-				sendToCmdQueue(JenaFusekiSystemAdapterConstants.BULK_LOADING_DATA_FINISHED);
+				sendToCmdQueue(Constants.BULK_LOADING_DATA_FINISHED);
 			} catch (IOException e) {
 				e.printStackTrace();
 			}
