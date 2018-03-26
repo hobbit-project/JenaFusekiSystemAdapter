@@ -48,7 +48,8 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	private Semaphore allDataReceivedMutex = new Semaphore(0);
 	private Semaphore fusekiServerStartedMutex = new Semaphore(0);
 	
-	private ExecutorService executor = Executors.newSingleThreadExecutor();
+//	private ExecutorService executor = Executors.newSingleThreadExecutor();
+	private ExecutorService executor = Executors.newFixedThreadPool(10);
 	private ReadWriteLock lock = new ReentrantReadWriteLock();
 	
 	private int loadingNumber = 0;
@@ -222,7 +223,20 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			// after all bulk load phases over start the Apache Jena Fuseki Server
 			if(dataLoadingFinished && !fusekiServerStarted.get()) {
 				fusekiServerStarted.set(startJenaFuseki());
-				fusekiServerStartedMutex.release();
+				// for the versioning benchmark move default graph triples 
+				// that previously loaded from tdbloader2 to http://graph.version.0
+				if(loadingNumber > 2) {
+					executor.submit(() -> {
+						lock.writeLock().lock();
+						try {
+							Txn.executeWrite(conn, () -> conn.update("MOVE DEFAULT TO <http://graph.version.0>"));
+						} finally {
+							lock.writeLock().unlock();
+							// release after move have completed
+							fusekiServerStartedMutex.release();
+						}
+					});
+				}				
 			}
 			
 			try {
@@ -291,6 +305,12 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
             LOGGER.error("Exception while waiting for executors termination.", e);
 		}
 		super.close();
+//		try {
+//			Thread.sleep(1000 * 60 * 60);
+//		} catch (InterruptedException e) {
+//			// TODO Auto-generated catch block
+//			e.printStackTrace();
+//		}
 		LOGGER.info("Apache Jena Fuseki has stopped.");
 	}
 
