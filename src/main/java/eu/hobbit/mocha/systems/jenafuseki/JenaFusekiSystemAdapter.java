@@ -1,17 +1,14 @@
 package eu.hobbit.mocha.systems.jenafuseki;
 
-import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.commons.io.FileUtils;
@@ -46,19 +43,15 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	private AtomicInteger totalSent = new AtomicInteger(0);
 
 	private Semaphore allDataReceivedMutex = new Semaphore(0);
-	private Semaphore fusekiServerStartedMutex = new Semaphore(0);
 	
 	private ExecutorService executor = Executors.newFixedThreadPool(8);
 	private LockMRSW lock = new LockMRSW();
 	
 	private int loadingNumber = 0;
-	private AtomicBoolean fusekiServerStarted = new AtomicBoolean(false);
 	private String datasetFolderName = "/myvol/datasets";
+	private String jenaFusekiContainerName = null;
 	
 	private RDFConnection conn;
-	
-	private long spaceBefore = 0;
-
 		
 	public JenaFusekiSystemAdapter(int numberOfMessagesInParallel) {
 		super(numberOfMessagesInParallel);
@@ -68,10 +61,32 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	
 	public void init() throws Exception {
 		LOGGER.info("Initialization begins. (insert data");
-		conn = RDFConnectionFactory.connect("http://localhost:3030/ds");
 		super.init();
-		spaceBefore = new File("/").getFreeSpace();
+		internalInit();
 		LOGGER.info("Initialization is over.");
+	}
+	
+	public void internalInit() {
+		String[] envVariables = new String [] { "ADMIN_PASSWORD=admin", "JVM_ARGS=-Xmx2g" };
+		jenaFusekiContainerName = this.createContainer("git.project-hobbit.eu:4567/papv/triplestores/jenafuseki", envVariables);
+		
+		conn = RDFConnectionFactory.connect("http://" + jenaFusekiContainerName + ":3030/ds");
+
+		LOGGER.info("Waiting for the Jena Fuseki server to become online");
+		ResultSet results = null;
+		while (results == null) {
+            LOGGER.info("Using " + "http://" + jenaFusekiContainerName + ":3030/ds" + " to run test select query");
+			try (QueryExecution qExec = conn.query("SELECT * WHERE { ?s ?p ?o } LIMIT 1")) {
+				results = qExec.execSelect();
+			} catch (Exception e) {
+				try {
+					TimeUnit.SECONDS.sleep(2);
+				} catch (InterruptedException e2) {
+					LOGGER.info("An error occured while waiting for Jena Fuseki server to become online.", e2);
+				}
+			}
+		}
+		LOGGER.info("Jena Fuseki server is now online.");
 	}
 	
 	public void receiveGeneratedData(byte[] data) {
@@ -120,27 +135,11 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 		}
 	}
 
-	public void receiveGeneratedTask(String taskId, byte[] data) {
-		// before executing a task check if Fuseki Server is up and running and if not wait until it is
-		if(!fusekiServerStarted.get()) {
-			LOGGER.info("[Task] Waiting until Jena Fuseki Server is online...");
-			try {
-				fusekiServerStartedMutex.acquire();
-			} catch (InterruptedException e) {
-				LOGGER.error("Exception while waitting for Fuseki Server to be started.", e);
-			}
-			LOGGER.info("Jena Fuseki Server started successfully.");
-		}
-		
-		if(taskId.equals("0")) {
-			long storageSpaceCost = spaceBefore - new File("/").getFreeSpace();
-			LOGGER.info("Storage space cost: " + storageSpaceCost);
-		}
+	public void receiveGeneratedTask(String taskId, byte[] data) {		
 		
 		ByteBuffer buffer = ByteBuffer.wrap(data);
 		String queryString = RabbitMQUtils.readString(buffer);
 		
-		long timestamp1 = System.currentTimeMillis();
 		if (queryString.contains("INSERT DATA")) {
 			executor.submit(() -> {
 				lock.enterCriticalSection(Lock.WRITE);
@@ -184,8 +183,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			};
 			executor.submit(readTask);
 		}
-		long timestamp2 = System.currentTimeMillis();
-		LOGGER.info("Task " + taskId + ": " + (timestamp2-timestamp1));
+		LOGGER.info("Task " + taskId + " submited for execution.");
 	}
 
 	@Override
@@ -211,7 +209,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			}
 			LOGGER.info("All data for bulk load " + loadingNumber + " received. Proceed to the loading...");
 
-			loadVersion("http://graph.version." + loadingNumber);
+			loadVersionRDFConn("http://graph.version." + loadingNumber);
 
 			LOGGER.info("Bulk loading phase (" + loadingNumber + ") is over.");
 			
@@ -227,25 +225,6 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			dataLoadingFinished = lastBulkLoad;
 			LOGGER.info("dataLoadingFinished: " + dataLoadingFinished);
 			
-			// after all bulk load phases over start the Apache Jena Fuseki Server
-			if(dataLoadingFinished && !fusekiServerStarted.get()) {
-				fusekiServerStarted.set(startJenaFuseki());
-				// for the versioning benchmark move default graph triples 
-				// that previously loaded from tdbloader2 to http://graph.version.0
-				if(loadingNumber > 2) {
-					executor.submit(() -> {
-						lock.enterCriticalSection(Lock.WRITE);
-						try {
-							Txn.executeWrite(conn, () -> conn.update("MOVE DEFAULT TO <http://graph.version.0>"));
-						} finally {
-							lock.leaveCriticalSection();
-							// release after move have completed
-							fusekiServerStartedMutex.release();
-						}
-					});
-				}				
-			}
-			
 			try {
 				sendToCmdQueue(Constants.BULK_LOADING_DATA_FINISHED);
 			} catch (IOException e) {
@@ -255,51 +234,20 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 		super.receiveCommand(command, data);
 	}
 	
-	/*
-	 * Load all files contained in data path using the tdbloader.
-	 * tdbloader cannot be run in parallel with fuseki server (due to transaction issues), so the server
-	 * have to be started after the bulk loading phase.
-	 */
-	private void loadVersion(String graphURI) {
-		LOGGER.info("Loading data on " + graphURI + "...");
-		try {
-			String scriptFilePath = System.getProperty("user.dir") + File.separator + "scripts" + File.separator + "load.sh";
-			String[] command = {"/bin/bash", scriptFilePath, datasetFolderName, graphURI};
-			Process p = new ProcessBuilder(command).redirectErrorStream(true).start();
-			BufferedReader in = new BufferedReader(new InputStreamReader(p.getInputStream()));
-			String line;
-			while ((line = in.readLine()) != null) {
-				LOGGER.info(line);		
+	private void loadVersionRDFConn(String graphUri) {
+		File[] dataFiles = new File(datasetFolderName).listFiles();
+		if (dataFiles != null) {
+			lock.enterCriticalSection(Lock.WRITE);
+			try {
+				for(File inputFile : dataFiles) {
+					Txn.executeWrite(conn, () ->{
+						conn.load(graphUri, inputFile.getAbsolutePath());
+					});
+				}
+			} finally {
+				lock.leaveCriticalSection();
 			}
-			p.waitFor();
-			LOGGER.info(graphURI + " loaded successfully.");
-			in.close();
-		} catch (IOException e) {
-            LOGGER.error("Exception while executing script for loading data.", e);
-		} catch (InterruptedException e) {
-            LOGGER.error("Exception while executing script for loading data.", e);
 		}
-	}
-	
-
-	private boolean startJenaFuseki() {
-		try {
-			String scriptFilePath = System.getProperty("user.dir") + File.separator + "scripts" + File.separator + "fuseki-server_start.sh";
-			String[] command = {"/bin/bash", scriptFilePath};
-			Process p = new ProcessBuilder(command).redirectErrorStream(true).start();
-			BufferedReader in = new BufferedReader(new InputStreamReader(p.getInputStream()));
-			String line;
-			while ((line = in.readLine()) != null) {
-				LOGGER.info(line);		
-			}
-			p.waitFor();
-			in.close();
-		} catch (IOException e) {
-            LOGGER.error("Exception while executing script for starting Fuseki Server.", e);
-		} catch (InterruptedException e) {
-            LOGGER.error("Exception while executing script for starting Fuseki Server.", e);
-		}
-		return true;
 	}
 
 	public void close() throws IOException {
@@ -311,6 +259,10 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 		} catch (InterruptedException e) {
             LOGGER.error("Exception while waiting for executors termination.", e);
 		}
+		
+		// stop the jenafuseki container
+		stopContainer(jenaFusekiContainerName);
+				
 		super.close();
 		LOGGER.info("Apache Jena Fuseki has stopped.");
 	}
