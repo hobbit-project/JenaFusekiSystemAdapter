@@ -131,7 +131,6 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 		ByteBuffer buffer = ByteBuffer.wrap(data);
 		String queryString = RabbitMQUtils.readString(buffer);
 		
-		long timestamp1 = System.currentTimeMillis();
 		if (queryString.contains("INSERT DATA")) {
 			executor.submit(() -> {
 				lock.enterCriticalSection(Lock.WRITE);
@@ -175,8 +174,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			};
 			executor.submit(readTask);
 		}
-		long timestamp2 = System.currentTimeMillis();
-		LOGGER.info("Task " + taskId + ": " + (timestamp2-timestamp1));
+		LOGGER.info("Task " + taskId + " submited for execution.");
 	}
 
 	@Override
