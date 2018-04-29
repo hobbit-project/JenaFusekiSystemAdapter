@@ -13,8 +13,6 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.jena.query.QueryExecution;
@@ -22,6 +20,8 @@ import org.apache.jena.query.ResultSet;
 import org.apache.jena.query.ResultSetFormatter;
 import org.apache.jena.rdfconnection.RDFConnection;
 import org.apache.jena.rdfconnection.RDFConnectionFactory;
+import org.apache.jena.shared.Lock;
+import org.apache.jena.shared.LockMRSW;
 import org.apache.jena.system.Txn;
 import org.hobbit.core.components.AbstractSystemAdapter;
 import org.hobbit.core.rabbit.RabbitMQUtils;
@@ -48,8 +48,8 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	private Semaphore allDataReceivedMutex = new Semaphore(0);
 	private Semaphore fusekiServerStartedMutex = new Semaphore(0);
 	
-	private ExecutorService executor = Executors.newSingleThreadExecutor();
-	private ReadWriteLock lock = new ReentrantReadWriteLock();
+	private ExecutorService executor = Executors.newFixedThreadPool(8);
+	private LockMRSW lock = new LockMRSW();
 	
 	private int loadingNumber = 0;
 	private AtomicBoolean fusekiServerStarted = new AtomicBoolean(false);
@@ -64,7 +64,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	public JenaFusekiSystemAdapter() { }
 	
 	public void init() throws Exception {
-		LOGGER.info("Initialization begins. (insert data");
+		LOGGER.info("Initialization begins.");
 		conn = RDFConnectionFactory.connect("http://localhost:3030/ds");
 		super.init();
 		LOGGER.info("Initialization is over.");
@@ -106,11 +106,11 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			String rewrittenInsertQuery = insertQuery;
 			
 			executor.submit(() -> {
-				lock.writeLock().lock();
+				lock.enterCriticalSection(Lock.WRITE);
 				try {
 					Txn.executeWrite(conn, () -> conn.update(rewrittenInsertQuery));
 				} finally {
-					lock.writeLock().unlock();
+					lock.leaveCriticalSection();
 				}
 			});
 		}
@@ -131,14 +131,13 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 		ByteBuffer buffer = ByteBuffer.wrap(data);
 		String queryString = RabbitMQUtils.readString(buffer);
 		
-		long timestamp1 = System.currentTimeMillis();
 		if (queryString.contains("INSERT DATA")) {
 			executor.submit(() -> {
-				lock.writeLock().lock();
+				lock.enterCriticalSection(Lock.WRITE);
 				try {
 					Txn.executeWrite(conn, () -> conn.update(queryString));
 				} finally {
-					lock.writeLock().unlock();
+					lock.leaveCriticalSection();
 				}
 				try {
 					this.sendResultToEvalStorage(taskId, RabbitMQUtils.writeString(""));
@@ -146,11 +145,10 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 					LOGGER.error("Got an exception while sending results.", e);
 				}
 			});
-		}
-		else {
+		} else {
 			ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
 			Runnable readTask = () -> {
-				lock.readLock().lock();
+				lock.enterCriticalSection(Lock.READ);
 				try {
 					Txn.executeRead(conn, () -> {
 						try (QueryExecution qExec = conn.query(queryString)) {
@@ -171,13 +169,12 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 						}
 			        }); 		
 				} finally {
-					lock.readLock().unlock();
+					lock.leaveCriticalSection();
 				}	
 			};
 			executor.submit(readTask);
 		}
-		long timestamp2 = System.currentTimeMillis();
-		LOGGER.info("Task " + taskId + ": " + (timestamp2-timestamp1));
+		LOGGER.info("Task " + taskId + " submited for execution.");
 	}
 
 	@Override
@@ -222,7 +219,20 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			// after all bulk load phases over start the Apache Jena Fuseki Server
 			if(dataLoadingFinished && !fusekiServerStarted.get()) {
 				fusekiServerStarted.set(startJenaFuseki());
-				fusekiServerStartedMutex.release();
+				// for the versioning benchmark move default graph triples 
+				// that previously loaded from tdbloader2 to http://graph.version.0
+				if(loadingNumber > 2) {
+					executor.submit(() -> {
+						lock.enterCriticalSection(Lock.WRITE);
+						try {
+							Txn.executeWrite(conn, () -> conn.update("MOVE DEFAULT TO <http://graph.version.0>"));
+						} finally {
+							lock.leaveCriticalSection();
+							// release after move have completed
+							fusekiServerStartedMutex.release();
+						}
+					});
+				}				
 			}
 			
 			try {
@@ -289,7 +299,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			executor.awaitTermination(20, TimeUnit.MINUTES);
 		} catch (InterruptedException e) {
             LOGGER.error("Exception while waiting for executors termination.", e);
-		}
+		}				
 		super.close();
 		LOGGER.info("Apache Jena Fuseki has stopped.");
 	}
