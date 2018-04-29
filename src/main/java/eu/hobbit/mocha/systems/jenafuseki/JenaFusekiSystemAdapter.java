@@ -56,9 +56,6 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	private String datasetFolderName = "/myvol/datasets";
 	
 	private RDFConnection conn;
-	
-	private long spaceBefore = 0;
-
 		
 	public JenaFusekiSystemAdapter(int numberOfMessagesInParallel) {
 		super(numberOfMessagesInParallel);
@@ -67,10 +64,9 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	public JenaFusekiSystemAdapter() { }
 	
 	public void init() throws Exception {
-		LOGGER.info("Initialization begins. (insert data");
+		LOGGER.info("Initialization begins.");
 		conn = RDFConnectionFactory.connect("http://localhost:3030/ds");
 		super.init();
-		spaceBefore = new File("/").getFreeSpace();
 		LOGGER.info("Initialization is over.");
 	}
 	
@@ -130,11 +126,6 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 				LOGGER.error("Exception while waitting for Fuseki Server to be started.", e);
 			}
 			LOGGER.info("Jena Fuseki Server started successfully.");
-		}
-		
-		if(taskId.equals("0")) {
-			long storageSpaceCost = spaceBefore - new File("/").getFreeSpace();
-			LOGGER.info("Storage space cost: " + storageSpaceCost);
 		}
 		
 		ByteBuffer buffer = ByteBuffer.wrap(data);
@@ -310,7 +301,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			executor.awaitTermination(20, TimeUnit.MINUTES);
 		} catch (InterruptedException e) {
             LOGGER.error("Exception while waiting for executors termination.", e);
-		}
+		}				
 		super.close();
 		LOGGER.info("Apache Jena Fuseki has stopped.");
 	}
