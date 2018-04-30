@@ -246,7 +246,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	
 	/*
 	 * Load all files contained in data path using the tdbloader.
-	 * tdbloader cannot be run in parallel with fuseki server (due to transaction issues), so the server
+	 * tdbloader cannot be run in parallel with fuseki server (due to transactions issues), so the server
 	 * have to be started after the bulk loading phase.
 	 */
 	private void loadVersion(String graphURI) {
@@ -296,7 +296,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 		conn.close();
 		executor.shutdown();
 		try {
-			executor.awaitTermination(20, TimeUnit.MINUTES);
+			executor.awaitTermination(180, TimeUnit.MINUTES);
 		} catch (InterruptedException e) {
             LOGGER.error("Exception while waiting for executors termination.", e);
 		}				
