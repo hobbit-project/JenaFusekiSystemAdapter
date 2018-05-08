@@ -293,13 +293,17 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 
 	public void close() throws IOException {
 		LOGGER.info("Stopping Apache Jena Fuseki.");
-		conn.close();
 		executor.shutdown();
-		try {
-			executor.awaitTermination(180, TimeUnit.MINUTES);
-		} catch (InterruptedException e) {
-            LOGGER.error("Exception while waiting for executors termination.", e);
-		}				
+	    try {
+	        if (!executor.awaitTermination(20, TimeUnit.MINUTES)) {
+	        	executor.shutdownNow();
+	        }
+	    } catch (InterruptedException ex) {
+	    	executor.shutdownNow();
+	        Thread.currentThread().interrupt();
+	    } finally {
+	    	conn.close();
+	    }			
 		super.close();
 		LOGGER.info("Apache Jena Fuseki has stopped.");
 	}
