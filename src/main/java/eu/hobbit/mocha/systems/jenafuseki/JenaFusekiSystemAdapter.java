@@ -113,6 +113,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 					lock.leaveCriticalSection();
 				}
 			});
+			LOGGER.info("INSERT query submited for execution.");
 		}
 	}
 
@@ -145,6 +146,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 					LOGGER.error("Got an exception while sending results.", e);
 				}
 			});
+			LOGGER.info("Task " + taskId + " (INSERT) submited for execution.");
 		} else {
 			ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
 			Runnable readTask = () -> {
@@ -161,21 +163,21 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 							} catch (IOException e1) {
 								LOGGER.error("Problem while executing task " + taskId + ": " + queryString, e);
 							}
-						} 
-						try {
-							sendResultToEvalStorage(taskId, outputStream.toByteArray());
-							LOGGER.info("Results of task " + taskId + " sent to evaluation storage.");
-						} catch (IOException e) {
-							LOGGER.error("Got an exception while sending results.", e);
 						}
 			        }); 		
 				} finally {
 					lock.leaveCriticalSection();
-				}	
+				}
+				try {
+					sendResultToEvalStorage(taskId, outputStream.toByteArray());
+					LOGGER.info("Results of task " + taskId + " sent to evaluation storage.");
+				} catch (IOException e) {
+					LOGGER.error("Got an exception while sending results.", e);
+				}
 			};
 			executor.submit(readTask);
 		}
-		LOGGER.info("Task " + taskId + " submited for execution.");
+		LOGGER.info("Task " + taskId + " (SELECT) submited for execution.");
 	}
 
 	@Override
