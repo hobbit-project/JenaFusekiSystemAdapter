@@ -163,7 +163,8 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 							}
 						} 
 						try {
-							this.sendResultToEvalStorage(taskId, outputStream.toByteArray());
+							sendResultToEvalStorage(taskId, outputStream.toByteArray());
+							LOGGER.info("Results of task " + taskId + " sent to evaluation storage.");
 						} catch (IOException e) {
 							LOGGER.error("Got an exception while sending results.", e);
 						}
@@ -290,20 +291,34 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 		}
 		return true;
 	}
+	
+	private void shutdownAndAwaitTermination() {
+		// Disable new tasks from being submitted
+		LOGGER.info("Shutting down executor service.");
+		executor.shutdown();
+		try {
+			// Wait for existing tasks to terminate
+			if (!executor.awaitTermination(20, TimeUnit.MINUTES)) {
+				// After timeout cancel currently executing tasks
+				LOGGER.info("Timeout of 20 minutes reached. Shutdown now.");
+				executor.shutdownNow();
+				// Wait a while for tasks to respond to being cancelled
+				if (!executor.awaitTermination(60, TimeUnit.SECONDS))
+					LOGGER.error("Executor service did not terminate");
+			}
+		} catch (InterruptedException ie) {
+			// (Re-)Cancel if current thread also interrupted
+			LOGGER.info("Current thread interrupted. Shutdown now.");
+			executor.shutdownNow();
+			// Preserve interrupt status
+			Thread.currentThread().interrupt();
+		}
+	}
 
 	public void close() throws IOException {
 		LOGGER.info("Stopping Apache Jena Fuseki.");
-		executor.shutdown();
-	    try {
-	        if (!executor.awaitTermination(20, TimeUnit.MINUTES)) {
-	        	executor.shutdownNow();
-	        }
-	    } catch (InterruptedException ex) {
-	    	executor.shutdownNow();
-	        Thread.currentThread().interrupt();
-	    } finally {
-	    	conn.close();
-	    }			
+		shutdownAndAwaitTermination();
+		conn.close();		
 		super.close();
 		LOGGER.info("Apache Jena Fuseki has stopped.");
 	}
