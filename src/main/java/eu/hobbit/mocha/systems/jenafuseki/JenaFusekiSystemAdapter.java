@@ -48,7 +48,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 	private Semaphore allDataReceivedMutex = new Semaphore(0);
 	private Semaphore fusekiServerStartedMutex = new Semaphore(0);
 	
-	private ExecutorService executor = Executors.newFixedThreadPool(8);
+	private ExecutorService executor = Executors.newFixedThreadPool(32);
 	private LockMRSW lock = new LockMRSW();
 	
 	private int loadingNumber = 0;
@@ -172,7 +172,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 					sendResultToEvalStorage(taskId, outputStream.toByteArray());
 					LOGGER.info("Results of task " + taskId + " sent to evaluation storage.");
 				} catch (IOException e) {
-					LOGGER.error("Got an exception while sending results.", e);
+					LOGGER.error("Got an exception while sending results of task " + taskId, e);
 				}
 			};
 			executor.submit(readTask);
