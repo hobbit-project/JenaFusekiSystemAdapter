@@ -47,6 +47,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 
 	private Semaphore allDataReceivedMutex = new Semaphore(0);
 	private Semaphore fusekiServerStartedMutex = new Semaphore(0);
+	private Semaphore allTaskExecutedOrTimeoutMutex = new Semaphore(0);
 	
 	private ExecutorService executor = Executors.newFixedThreadPool(32);
 	private LockMRSW lock = new LockMRSW();
@@ -148,34 +149,34 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			});
 			LOGGER.info("Task " + taskId + " (INSERT) submited for execution.");
 		} else {
-			ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-			Runnable readTask = () -> {
+			executor.submit(() -> {
 				lock.enterCriticalSection(Lock.READ);
 				try {
 					Txn.executeRead(conn, () -> {
+						ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
 						try (QueryExecution qExec = conn.query(queryString)) {
 							ResultSet results = qExec.execSelect();
 			            	ResultSetFormatter.outputAsJSON(outputStream, results);
 			            } catch (Exception e) {
-							LOGGER.error("Problem while executing task " + taskId + ": " + queryString, e);
+							LOGGER.error("Problem while executing task " + taskId, e);
 							try {
 								outputStream.write("{\"head\":{\"vars\":[\"xxx\"]},\"results\":{\"bindings\":[{\"xxx\":{\"type\":\"literal\",\"value\":\"XXX\"}}]}}".getBytes());
 							} catch (IOException e1) {
-								LOGGER.error("Problem while executing task " + taskId + ": " + queryString, e);
+								LOGGER.error("Exception while writing empty results of task " + taskId, e);
+							}
+						} finally {
+							try {
+								sendResultToEvalStorage(taskId, outputStream.toByteArray());
+								LOGGER.info("Results of task " + taskId + " sent to evaluation storage.");
+							} catch (IOException e) {
+								LOGGER.error("Exception while sending empty results of task " + taskId + " to the evaluation storage.", e);
 							}
 						}
 			        }); 		
 				} finally {
 					lock.leaveCriticalSection();
 				}
-				try {
-					sendResultToEvalStorage(taskId, outputStream.toByteArray());
-					LOGGER.info("Results of task " + taskId + " sent to evaluation storage.");
-				} catch (IOException e) {
-					LOGGER.error("Got an exception while sending results of task " + taskId, e);
-				}
-			};
-			executor.submit(readTask);
+			});
 		}
 		LOGGER.info("Task " + taskId + " (SELECT) submited for execution.");
 	}
@@ -300,7 +301,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 		executor.shutdown();
 		try {
 			// Wait for existing tasks to terminate
-			if (!executor.awaitTermination(20, TimeUnit.MINUTES)) {
+			if (!executor.awaitTermination(2, TimeUnit.HOURS)) {
 				// After timeout cancel currently executing tasks
 				LOGGER.info("Timeout of 20 minutes reached. Shutdown now.");
 				executor.shutdownNow();
@@ -308,18 +309,26 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 				if (!executor.awaitTermination(60, TimeUnit.SECONDS))
 					LOGGER.error("Executor service did not terminate");
 			}
+			LOGGER.info("All tasks executed successfully before timeout reached.");
 		} catch (InterruptedException ie) {
 			// (Re-)Cancel if current thread also interrupted
 			LOGGER.info("Current thread interrupted. Shutdown now.");
 			executor.shutdownNow();
 			// Preserve interrupt status
 			Thread.currentThread().interrupt();
+		} finally {
+			allTaskExecutedOrTimeoutMutex.release();
 		}
 	}
 
 	public void close() throws IOException {
 		LOGGER.info("Stopping Apache Jena Fuseki.");
 		shutdownAndAwaitTermination();
+		try {
+			allTaskExecutedOrTimeoutMutex.acquire();
+		} catch (InterruptedException e) {
+			LOGGER.error("An error occured while waiting for the executor service to terminate");
+		}
 		conn.close();		
 		super.close();
 		LOGGER.info("Apache Jena Fuseki has stopped.");
