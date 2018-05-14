@@ -84,7 +84,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 				try {
 					if (fileName.contains("/"))
 						fileName = fileName.replaceAll("[^/]*[/]", "");
-					FileUtils.writeByteArrayToFile(new File(datasetFolderName + File.separator + fileName), content);
+					FileUtils.writeByteArrayToFile(new File(datasetFolderName + File.separator + fileName), content, true);
 				} catch (FileNotFoundException e) {
 					LOGGER.error("Exception while writing data file", e);
 				} catch (IOException e) {
