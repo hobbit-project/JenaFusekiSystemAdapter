@@ -45,6 +45,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter1 {
 	
 	private AtomicInteger totalReceived = new AtomicInteger(0);
 	private AtomicInteger totalSent = new AtomicInteger(0);
+	private AtomicInteger totalDGInserts = new AtomicInteger(0);
 
 	private Semaphore allDataReceivedMutex = new Semaphore(0);
 	private Semaphore fusekiServerStartedMutex = new Semaphore(0);
@@ -107,15 +108,17 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter1 {
 			insertQuery = insertQuery.substring(0, insertQuery.length() - 13).concat(" }");
 			String rewrittenInsertQuery = insertQuery;
 			
+			int currInsertCount = totalDGInserts.incrementAndGet();
 			executor.submit(() -> {
 				lock.enterCriticalSection(Lock.WRITE);
 				try {
 					Txn.executeWrite(conn, () -> conn.update(rewrittenInsertQuery));
+					LOGGER.info("INSERT query (" + currInsertCount + "/" + totalDGInserts.get() + "already submitted) executed successfully.");
 				} finally {
 					lock.leaveCriticalSection();
 				}
 			});
-			LOGGER.info("INSERT query received from DG and submitted for execution.");
+			LOGGER.info("INSERT query (" + currInsertCount + ") received from data generator and submitted for execution.");
 		}
 	}
 
