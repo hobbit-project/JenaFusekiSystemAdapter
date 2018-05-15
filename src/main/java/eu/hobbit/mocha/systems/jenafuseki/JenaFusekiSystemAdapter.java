@@ -45,7 +45,9 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter1 {
 	
 	private AtomicInteger totalReceived = new AtomicInteger(0);
 	private AtomicInteger totalSent = new AtomicInteger(0);
+	
 	private AtomicInteger totalDGInserts = new AtomicInteger(0);
+	private AtomicInteger totalDGInsertsExecuted = new AtomicInteger(0);
 
 	private Semaphore allDataReceivedMutex = new Semaphore(0);
 	private Semaphore fusekiServerStartedMutex = new Semaphore(0);
@@ -113,7 +115,10 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter1 {
 				lock.enterCriticalSection(Lock.WRITE);
 				try {
 					Txn.executeWrite(conn, () -> conn.update(rewrittenInsertQuery));
-					LOGGER.info("INSERT query (" + currInsertCount + "/" + totalDGInserts.get() + "already submitted) executed successfully.");
+					float totalExecutedPercentage = (float) currInsertCount / totalDGInsertsExecuted.incrementAndGet() * 100;
+					if(totalExecutedPercentage % 1 == 0) {
+						LOGGER.info(totalExecutedPercentage + "% of total INSERT queries have been executed successfully.");
+					}
 				} finally {
 					lock.leaveCriticalSection();
 				}
