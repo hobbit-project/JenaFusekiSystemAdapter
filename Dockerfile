@@ -15,4 +15,4 @@ RUN mkdir -p /jenafuseki/data
 
 WORKDIR /jenafuseki
 
-CMD java -cp /jenafuseki/jenafuseki.jar eu.hobbit.core.run.ComponentStarter1 eu.hobbit.mocha.systems.jenafuseki.JenaFusekiSystemAdapter
+CMD java -cp /jenafuseki/jenafuseki.jar org.hobbit.core.run.ComponentStarter1 eu.hobbit.mocha.systems.jenafuseki.JenaFusekiSystemAdapter
