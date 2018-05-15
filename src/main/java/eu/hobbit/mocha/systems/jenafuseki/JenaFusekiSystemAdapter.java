@@ -24,6 +24,7 @@ import org.apache.jena.shared.Lock;
 import org.apache.jena.shared.LockMRSW;
 import org.apache.jena.system.Txn;
 import org.hobbit.core.components.AbstractSystemAdapter;
+import org.hobbit.core.components.AbstractSystemAdapter1;
 import org.hobbit.core.rabbit.RabbitMQUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,7 +37,7 @@ import eu.hobbit.mocha.systems.jenafuseki.util.Constants;
  * @author Vassilis Papakonstantinou (papv@ics.forth.gr)
  */
 
-public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
+public class JenaFusekiSystemAdapter extends AbstractSystemAdapter1 {
 	
 	private static final Logger LOGGER = LoggerFactory.getLogger(JenaFusekiSystemAdapter.class);
 		
@@ -114,7 +115,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 					lock.leaveCriticalSection();
 				}
 			});
-			LOGGER.info("INSERT query submited for execution.");
+			LOGGER.info("INSERT query received from DG and submitted for execution.");
 		}
 	}
 
@@ -147,7 +148,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 					LOGGER.error("Got an exception while sending results.", e);
 				}
 			});
-			LOGGER.info("Task " + taskId + " (INSERT) submited for execution.");
+			LOGGER.info("Task " + taskId + " (INSERT) submitted for execution.");
 		} else {
 			executor.submit(() -> {
 				lock.enterCriticalSection(Lock.READ);
@@ -157,19 +158,20 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 						try (QueryExecution qExec = conn.query(queryString)) {
 							ResultSet results = qExec.execSelect();
 			            	ResultSetFormatter.outputAsJSON(outputStream, results);
+			            	try {
+								sendResultToEvalStorage(taskId, outputStream.toByteArray());
+								LOGGER.info("Results of task " + taskId + " sent to the evaluation storage.");
+							} catch (IOException e) {
+								LOGGER.error("Exception while sending results of task " + taskId + " to the evaluation storage.", e);
+							}
 			            } catch (Exception e) {
 							LOGGER.error("Problem while executing task " + taskId, e);
 							try {
 								outputStream.write("{\"head\":{\"vars\":[\"xxx\"]},\"results\":{\"bindings\":[{\"xxx\":{\"type\":\"literal\",\"value\":\"XXX\"}}]}}".getBytes());
-							} catch (IOException e1) {
-								LOGGER.error("Exception while writing empty results of task " + taskId, e);
-							}
-						} finally {
-							try {
 								sendResultToEvalStorage(taskId, outputStream.toByteArray());
-								LOGGER.info("Results of task " + taskId + " sent to evaluation storage.");
-							} catch (IOException e) {
-								LOGGER.error("Exception while sending empty results of task " + taskId + " to the evaluation storage.", e);
+								LOGGER.info("Results of task " + taskId + " sent to the evaluation storage.");
+							} catch (IOException e1) {
+								LOGGER.error("Exception while writing/sending empty results of task " + taskId, e);
 							}
 						}
 			        }); 		
@@ -178,7 +180,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 				}
 			});
 		}
-		LOGGER.info("Task " + taskId + " (SELECT) submited for execution.");
+		LOGGER.info("Task " + taskId + " (SELECT) submitted for execution.");
 	}
 
 	@Override
@@ -301,15 +303,17 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 		executor.shutdown();
 		try {
 			// Wait for existing tasks to terminate
+			LOGGER.info("Waiting for submitted tasks to executed");
 			if (!executor.awaitTermination(2, TimeUnit.HOURS)) {
 				// After timeout cancel currently executing tasks
-				LOGGER.info("Timeout of 20 minutes reached. Shutdown now.");
+				LOGGER.info("Timeout of 2 hours reached. Shutdown now.");
 				executor.shutdownNow();
 				// Wait a while for tasks to respond to being cancelled
 				if (!executor.awaitTermination(60, TimeUnit.SECONDS))
 					LOGGER.error("Executor service did not terminate");
+			} else {
+				LOGGER.info("All tasks executed successfully before timeout reached.");
 			}
-			LOGGER.info("All tasks executed successfully before timeout reached.");
 		} catch (InterruptedException ie) {
 			// (Re-)Cancel if current thread also interrupted
 			LOGGER.info("Current thread interrupted. Shutdown now.");
@@ -317,6 +321,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter {
 			// Preserve interrupt status
 			Thread.currentThread().interrupt();
 		} finally {
+			LOGGER.info("Executor service shut down successfully.");
 			allTaskExecutedOrTimeoutMutex.release();
 		}
 	}
