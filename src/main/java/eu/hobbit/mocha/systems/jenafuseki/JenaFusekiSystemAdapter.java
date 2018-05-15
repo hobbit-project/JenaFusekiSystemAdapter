@@ -7,6 +7,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.ByteBuffer;
+import java.text.DecimalFormat;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
@@ -48,7 +49,9 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter1 {
 	
 	private AtomicInteger totalDGInserts = new AtomicInteger(0);
 	private AtomicInteger totalDGInsertsExecuted = new AtomicInteger(0);
-
+	private AtomicInteger totalTGSelects = new AtomicInteger(0);
+	private AtomicInteger totalTGSelectsExecuted = new AtomicInteger(0);
+	
 	private Semaphore allDataReceivedMutex = new Semaphore(0);
 	private Semaphore fusekiServerStartedMutex = new Semaphore(0);
 	private Semaphore allTaskExecutedOrTimeoutMutex = new Semaphore(0);
@@ -115,15 +118,13 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter1 {
 				lock.enterCriticalSection(Lock.WRITE);
 				try {
 					Txn.executeWrite(conn, () -> conn.update(rewrittenInsertQuery));
-					float totalExecutedPercentage = (float) currInsertCount / totalDGInsertsExecuted.incrementAndGet() * 100;
-					if(totalExecutedPercentage % 1 == 0) {
-						LOGGER.info(totalExecutedPercentage + "% of total INSERT queries have been executed successfully.");
-					}
+					float f = (float) totalDGInsertsExecuted.incrementAndGet() / totalDGInserts.get() * 100;
+					LOGGER.info(new DecimalFormat("#.##").format(f) + "% - INSERT " + currInsertCount + " of " + totalDGInserts.get() + " executed successfully.");
 				} finally {
 					lock.leaveCriticalSection();
 				}
 			});
-			LOGGER.info("INSERT query (" + currInsertCount + ") received from data generator and submitted for execution.");
+//			LOGGER.info("INSERT query (" + currInsertCount + ") received from data generator and submitted for execution.");
 		}
 	}
 
@@ -158,6 +159,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter1 {
 			});
 			LOGGER.info("Task " + taskId + " (INSERT) submitted for execution.");
 		} else {
+			int currSelectCount = totalTGSelects.incrementAndGet();
 			executor.submit(() -> {
 				lock.enterCriticalSection(Lock.READ);
 				try {
@@ -168,7 +170,7 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter1 {
 			            	ResultSetFormatter.outputAsJSON(outputStream, results);
 			            	try {
 								sendResultToEvalStorage(taskId, outputStream.toByteArray());
-								LOGGER.info("Results of task " + taskId + " sent to the evaluation storage.");
+//								LOGGER.info("Results of task " + taskId + " sent to the evaluation storage.");
 							} catch (IOException e) {
 								LOGGER.error("Exception while sending results of task " + taskId + " to the evaluation storage.", e);
 							}
@@ -177,18 +179,20 @@ public class JenaFusekiSystemAdapter extends AbstractSystemAdapter1 {
 							try {
 								outputStream.write("{\"head\":{\"vars\":[\"xxx\"]},\"results\":{\"bindings\":[{\"xxx\":{\"type\":\"literal\",\"value\":\"XXX\"}}]}}".getBytes());
 								sendResultToEvalStorage(taskId, outputStream.toByteArray());
-								LOGGER.info("Results of task " + taskId + " sent to the evaluation storage.");
+//								LOGGER.info("Results of task " + taskId + " sent to the evaluation storage.");
 							} catch (IOException e1) {
 								LOGGER.error("Exception while writing/sending empty results of task " + taskId, e);
 							}
 						}
+						float f = (float) totalTGSelectsExecuted.incrementAndGet() / totalTGSelects.get() * 100;
+						LOGGER.info(new DecimalFormat("#.##").format(f) + "% - SELECT " + currSelectCount + " of " + totalTGSelects.get() + " executed successfully.");
 			        }); 		
 				} finally {
 					lock.leaveCriticalSection();
 				}
 			});
 		}
-		LOGGER.info("Task " + taskId + " (SELECT) submitted for execution.");
+//		LOGGER.info("Task " + taskId + " (SELECT) submitted for execution.");
 	}
 
 	@Override
